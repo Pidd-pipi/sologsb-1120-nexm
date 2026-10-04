@@ -5,25 +5,46 @@ import { ElMessage } from 'element-plus';
 import { useClockStore } from '../stores/clockStore';
 import { usePartStore } from '../stores/partStore';
 import { useStepStore } from '../stores/stepStore';
+import { useInstrumentStore } from '../stores/instrumentStore';
 import { useRepairProgress } from '../hooks/useRepairProgress';
+import { useClockCompletion } from '../hooks/useClockCompletion';
 import StepSequence from '../components/common/StepSequence.vue';
 import RateChart from '../components/common/RateChart.vue';
 import StateBadge from '../components/common/StateBadge.vue';
 import { CONDITION_GRADES, type ConditionGrade } from '../types/clock';
-import { judgeTest } from '../types/test';
+import { judgeTest, testEvidenceOf, TEST_EVIDENCE_LABEL } from '../types/test';
 
 const route = useRoute();
 const router = useRouter();
 const clockStore = useClockStore();
 const partStore = usePartStore();
 const stepStore = useStepStore();
+const instrumentStore = useInstrumentStore();
 
 const clockId = computed(() => String(route.params.id ?? ''));
 const clock = computed(() => clockStore.byId(clockId.value));
 const { progress, steps, done, total, percent, current, gaps } = useRepairProgress(clockId);
 const parts = computed(() => partStore.byClock(clockId.value));
-const tests = computed(() => stepStore.testsByClock(clockId.value));
+const completion = useClockCompletion(clockId);
+const tests = computed(() => completion.value.tests);
 const activeTab = ref('steps');
+
+function evidenceTagType(t: (typeof tests.value)[number]): 'success' | 'danger' | 'warning' {
+  const evidence = testEvidenceOf(t, instrumentStore.items);
+  if (evidence === 'valid') return 'success';
+  if (evidence === 'invalid') return 'danger';
+  return 'warning';
+}
+function evidenceLabel(t: (typeof tests.value)[number]): string {
+  return TEST_EVIDENCE_LABEL[testEvidenceOf(t, instrumentStore.items)];
+}
+function instrumentText(t: (typeof tests.value)[number]): string {
+  const ref = t.instrumentRef;
+  if (!ref) return '无仪器记录（旧测试）';
+  const instrument = instrumentStore.byId(ref.instrumentId);
+  const name = instrument ? `${ref.instrumentNo} ${instrument.name}` : ref.instrumentNo;
+  return `${name} · 证书 ${ref.certNo}`;
+}
 
 async function finish(id: string) {
   await stepStore.finish(id);
@@ -55,6 +76,7 @@ onMounted(async () => {
   await clockStore.load();
   await partStore.load();
   await stepStore.load();
+  await instrumentStore.load();
 });
 </script>
 
@@ -103,10 +125,15 @@ onMounted(async () => {
             <div class="card-head">
               <strong>修复进度</strong>
               <el-tag size="small">{{ done }}/{{ total }} · {{ percent }}%</el-tag>
+              <el-tag v-if="completion.state === '已完成'" size="small" type="success">完工结论：已完成</el-tag>
+              <el-tag v-else-if="completion.allStepsDone" size="small" type="warning">待走时复测确认</el-tag>
               <span v-if="current" class="muted">
                 当前卡点：#{{ current.seq }} {{ current.stepType }}（{{ current.operator }}）
               </span>
-              <span v-else class="muted">全部步骤已完成</span>
+              <span v-else-if="completion.state !== '已完成'" class="muted">
+                全部工序已完成，尚无凭证有效且合格的走时测试，不能下完工结论
+              </span>
+              <span v-else class="muted">工序全部完成，走时测试凭证有效</span>
             </div>
           </template>
           <el-progress :percentage="percent" :stroke-width="12" />
@@ -133,11 +160,25 @@ onMounted(async () => {
               <el-empty v-if="parts.length === 0" description="暂无零件登记" :image-size="60" />
             </el-tab-pane>
             <el-tab-pane :label="`走时测试（${tests.length}）`" name="tests">
+              <el-alert
+                v-if="completion.allStepsDone && completion.passingTests.length === 0"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 10px"
+                :title="completion.invalidTests.length > 0
+                  ? '原走时测试所用仪器已停用/补检/改有效期，测试已失效，完工结论撤下，请复测确认'
+                  : '存在无仪器记录的旧测试（待补证），不沿用原合格结果，请用在有效期内的仪器复测'"
+              />
               <div v-for="t in tests" :key="t.id" class="test-block">
                 <div class="card-head">
                   <strong>{{ new Date(t.testedAt).toLocaleString('zh-CN') }}</strong>
-                  <el-tag size="small" type="success">{{ t.conclusion || judgeTest(t.rate, t.beatError, t.amplitude) }}</el-tag>
+                  <el-tag size="small" :type="evidenceTagType(t)">{{ evidenceLabel(t) }}</el-tag>
+                  <el-tag size="small" :type="(t.conclusion || judgeTest(t.rate, t.beatError, t.amplitude)) === '合格' ? 'success' : 'warning'">
+                    {{ t.conclusion || judgeTest(t.rate, t.beatError, t.amplitude) }}
+                  </el-tag>
                   <span class="muted">日差 {{ t.rate }} s/d · 摆幅 {{ t.amplitude }}° · 偏振 {{ t.beatError }} ms</span>
+                  <span class="muted">{{ instrumentText(t) }}</span>
                 </div>
                 <RateChart :readings="t.positions" />
               </div>

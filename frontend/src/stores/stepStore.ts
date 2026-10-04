@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { db, toPlain } from '../utils/db';
 import { newId } from '../utils/id';
 import type { RepairStep, RepairStepDraft } from '../types/step';
-import type { TimekeepingTest, TimekeepingTestDraft } from '../types/test';
+import type { TimekeepingTest } from '../types/test';
 
 interface StepState {
   items: RepairStep[];
@@ -26,6 +26,10 @@ export const useStepStore = defineStore('step', {
       const tests = await db.tests.toArray();
       this.tests = tests.sort((a, b) => b.testedAt - a.testedAt);
       this.loaded = true;
+    },
+    /** load 的语义化别名：仪器/预约页签改动后静默刷新凭证状态 */
+    async refresh() {
+      await this.load();
     },
     async add(draft: RepairStepDraft) {
       const record: RepairStep = { ...toPlain(draft), id: newId('stp') };
@@ -56,12 +60,6 @@ export const useStepStore = defineStore('step', {
         if (it.id === b.id) return { ...it, seq: aSeq };
         return it;
       });
-    },
-    async addTest(draft: TimekeepingTestDraft) {
-      const record: TimekeepingTest = { ...toPlain(draft), id: newId('tst') };
-      await db.tests.put(toPlain(record));
-      this.tests = [record, ...this.tests];
-      return record;
     },
     async removeTest(id: string) {
       await db.tests.delete(id);

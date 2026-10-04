@@ -27,7 +27,6 @@ docker compose down
 | 状态管理 | Pinia |
 | 路由 | Vue Router 4（history 模式） |
 | 本地存储 | IndexedDB（Dexie 4），含结构版本号与升级迁移 |
-
 ## 本地开发
 
 ```bash
@@ -58,12 +57,12 @@ sologsb-1120/
         ├── main.ts
         ├── App.vue
         ├── router/index.ts
-        ├── types/{clock,part,step,test}.ts
-        ├── stores/{clock,part,step}Store.ts
+        ├── types/{clock,part,step,test,instrument,reservation}.ts
+        ├── stores/{clock,part,step,instrument}Store.ts
         ├── components/common/{StepSequence,RateChart,ClockCard,StateBadge}.vue
-        ├── hooks/{useClockSearch,useRepairProgress}.ts
-        ├── pages/{ClockList,ClockDetail,StepForm,PartList,TestView}.vue
-        └── utils/{db,timeCalc,id}.ts
+        ├── hooks/{useClockSearch,useRepairProgress,useClockCompletion}.ts
+        ├── pages/{ClockList,ClockDetail,StepForm,PartList,InstrumentList,TestView}.vue
+        └── utils/{db,timeCalc,id,session,booking}.ts
 ```
 
 ## 页面与路由
@@ -71,20 +70,31 @@ sologsb-1120/
 | 路由 | 页面 | 消费模型 |
 | --- | --- | --- |
 | `/clocks` | 钟表台账：按种类/机芯/品相/年代区间筛选，按修复状态分栏 | Clock |
-| `/clocks/:id` | 钟表详情：左侧机芯信息，右侧工序流与走时测试记录，可切零件清单 | Clock、RepairStep、TimekeepingTest、MovementPart |
+| `/clocks/:id` | 钟表详情：左侧机芯信息，右侧工序流与走时测试记录，可切零件清单 | Clock、RepairStep、TimekeepingTest、MovementPart、CalibrationInstrument |
 | `/steps/new` | 新建维修工序：选步骤类型后动态出清洗液/油脂/力矩字段，顺序号冲突即报错 | RepairStep、MovementPart |
 | `/parts` | 零件与配换清单：按磨损状态分组，标出待修配条目与来源批号 | MovementPart |
-| `/tests/:clockId` | 走时测试录入与多方位均值计算，生成走时单文本 | TimekeepingTest |
+| `/instruments` | 仪器台账：校表仪登记/停用、补检、改检定有效期，查时段占用与待补证测试 | CalibrationInstrument、InstrumentReservation、TimekeepingTest |
+| `/tests/:clockId` | 走时测试：测前选在检定有效期内的在用仪器并预约时段，录入多方位读数 | TimekeepingTest、CalibrationInstrument、InstrumentReservation |
 
 `/` 重定向到 `/clocks`，未匹配路由同样兜底到 `/clocks`。
 
 ## 数据存储说明
 
-- 数据库名 `gbclockrepair`，当前结构版本 **v2**（`localStorage['gbclockrepair:db-version']` 记录）。
-- 四张表：`clocks`（钟表）、`parts`（机芯零件）、`steps`（维修工序）、`tests`（走时测试）。
+- 数据库名 `gbclockrepair`，当前结构版本 **v3**（`localStorage['gbclockrepair:db-version']` 记录）。
+- 六张表：`clocks`（钟表）、`parts`（机芯零件）、`steps`（维修工序）、`tests`（走时测试）、`instruments`（校表仪台账）、`reservations`（仪器时段预约）。
 - v1 → v2 迁移：补齐老记录的 `state`、`partIds`、`torque`、`positions` 字段并新增索引。
+- v2 → v3：新增仪器与预约两张表；测试凭证由 `instrumentRef` 快照动态判定，老测试无需迁移，自动列为「待补证」。
 - 容器无状态、不挂载命名卷；清空站点数据即回到初始示范数据。
-- 首次打开灌入 2 台示范钟表、3 项零件、3 道工序与 1 次走时测试。
+- 首次打开灌入 2 台示范钟表、3 项零件、3 道工序、3 台校表仪与 1 次**无仪器记录的旧走时测试**（演示待补证）。
+
+## 仪器、预约与完工口径
+
+- **测前必选仪器**：保存测试前必须选择「在用 + 检定在有效期内」的校表仪并预约时段；停用、过检、有效期不能覆盖整个时段或时段冲突，一律拒绝保存。
+- **跨页签互斥**：预约与保存都在单个 IndexedDB 读写事务内完成（先回收心跳超时项，再查重、再写入），两个页签抢同一台仪器同一时段只有一人成功。
+- **中断不占坑**：预约持有期间每 5s 心跳续约（TTL 15s）；取消、切换钟表、路由离开、关闭页签立即释放，崩溃残留由 TTL 与台账「回收中断超时预约」兜底。
+- **仪器变动即失效**：补检、停用、改检定有效期都会使仪器 `certVersion +1`，引用该仪器的历史测试立即失效；钟表「已完成」结论同步撤下，用有效期内仪器复测确认合格后恢复。
+- **旧测试待补证**：没有仪器记录（或仪器已删除）的旧测试一律列入「待补证」，不沿用原合格结果，必须复测。
+- 凭证规则可本地验证：`npx tsx scripts/booking.test.ts`（需 `fake-indexeddb`、`tsx`，仅开发期使用）。
 
 ## 功能要点
 

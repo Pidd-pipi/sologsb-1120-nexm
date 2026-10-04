@@ -4,29 +4,25 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useClockStore } from '../stores/clockStore';
 import { useStepStore } from '../stores/stepStore';
+import { useInstrumentStore } from '../stores/instrumentStore';
 import { useClockSearch } from '../hooks/useClockSearch';
+import { getClockCompletion } from '../hooks/useClockCompletion';
 import ClockCard from '../components/common/ClockCard.vue';
 import { CLOCK_KINDS, CONDITION_GRADES, type ClockDraft, type ClockKind, type ConditionGrade } from '../types/clock';
 
 const router = useRouter();
 const clockStore = useClockStore();
 const stepStore = useStepStore();
+const instrumentStore = useInstrumentStore();
 const { filters, result, options, reset } = useClockSearch();
 
 const REPAIR_STATES = ['未开工', '维修中', '待测试', '已完成'] as const;
 
 type RepairState = (typeof REPAIR_STATES)[number];
 
-/** 由工序与走时测试推导修复状态，用于台账分栏 */
+/** 由工序、走时测试凭证推导修复状态，用于台账分栏 */
 function repairStateOf(clockId: string): RepairState {
-  const steps = stepStore.items.filter((s) => s.clockId === clockId);
-  const tests = stepStore.tests.filter((t) => t.clockId === clockId);
-  const done = steps.filter((s) => s.state === 'done').length;
-  if (steps.length === 0) return '未开工';
-  if (done === steps.length && tests.length > 0) return '已完成';
-  if (done === steps.length) return '待测试';
-  if (done > 0) return '维修中';
-  return '未开工';
+  return getClockCompletion(clockId).state;
 }
 
 const columns = computed(() =>
@@ -79,6 +75,7 @@ async function submit() {
 onMounted(() => {
   void clockStore.load();
   void stepStore.load();
+  void instrumentStore.load();
 });
 </script>
 
@@ -145,7 +142,7 @@ onMounted(() => {
           :item="item"
           :footer="`工序 ${stepStore.items.filter((s) => s.clockId === item.id && s.state === 'done').length}/${
             stepStore.items.filter((s) => s.clockId === item.id).length
-          } · 走时测试 ${stepStore.tests.filter((t) => t.clockId === item.id).length} 次`"
+          } · 有效测试 ${getClockCompletion(item.id).passingTests.length}/${stepStore.tests.filter((t) => t.clockId === item.id).length} 次`"
           @open="(id) => router.push(`/clocks/${id}`)"
         />
         <el-empty v-if="col.rows.length === 0" description="暂无" :image-size="60" />

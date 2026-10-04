@@ -1,12 +1,14 @@
 import Dexie, { type Table } from 'dexie';
 import type { Clock } from '../types/clock';
+import type { CalibrationInstrument } from '../types/instrument';
 import type { MovementPart } from '../types/part';
+import type { InstrumentReservation } from '../types/reservation';
 import type { RepairStep } from '../types/step';
 import type { TimekeepingTest } from '../types/test';
 import { newId } from './id';
 
 export const DB_NAME = 'gbclockrepair';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbclockrepair:db-version';
 
 class ClockRepairDB extends Dexie {
@@ -14,6 +16,8 @@ class ClockRepairDB extends Dexie {
   parts!: Table<MovementPart, string>;
   steps!: Table<RepairStep, string>;
   tests!: Table<TimekeepingTest, string>;
+  instruments!: Table<CalibrationInstrument, string>;
+  reservations!: Table<InstrumentReservation, string>;
 
   constructor() {
     super(DB_NAME);
@@ -48,6 +52,15 @@ class ClockRepairDB extends Dexie {
             if (row.positions === undefined) row.positions = [];
           });
       });
+    // v3：仪器台账 + 时段预约，测试凭证由代码按 instrumentRef 动态判定，老记录无需迁移
+    this.version(3).stores({
+      clocks: 'id, clockNo, kind, caliber, conditionGrade, createdAt',
+      parts: 'id, clockId, name, wearState, decision, sourceLot',
+      steps: 'id, clockId, seq, stepType, state, startedAt',
+      tests: 'id, clockId, testedAt, conclusion',
+      instruments: 'id, instrumentNo, status, createdAt',
+      reservations: 'id, instrumentId, clockId, status, startAt, heartbeatAt',
+    });
   }
 }
 
@@ -212,6 +225,73 @@ export async function ensureSeedData(): Promise<void> {
     },
   ];
 
+  const instruments: CalibrationInstrument[] = [
+    {
+      id: newId('ins'),
+      instrumentNo: 'WTC-III-01',
+      name: 'Witschi Chronoscope III 校表仪',
+      maker: 'Witschi',
+      status: '在用',
+      location: '测试间 1 号台',
+      certVersion: 1,
+      createdAt: now - 180 * day,
+      calibrations: [
+        {
+          calibratedAt: now - 200 * day,
+          certNo: 'JL-2025-1102',
+          certOrg: '市计量测试研究院',
+          validUntil: now - 20 * day,
+          result: '合格',
+        },
+        {
+          calibratedAt: now - 30 * day,
+          certNo: 'JL-2026-0317',
+          certOrg: '市计量测试研究院',
+          validUntil: now + 335 * day,
+          result: '合格',
+        },
+      ],
+    },
+    {
+      id: newId('ins'),
+      instrumentNo: 'WTC-Q-02',
+      name: 'Witschi Q1 石英/机械校表仪',
+      maker: 'Witschi',
+      status: '在用',
+      location: '测试间 2 号台',
+      certVersion: 1,
+      createdAt: now - 320 * day,
+      calibrations: [
+        {
+          calibratedAt: now - 350 * day,
+          certNo: 'JL-2025-0640',
+          certOrg: '省钟表质量检测站',
+          validUntil: now + 15 * day,
+          result: '合格',
+        },
+      ],
+    },
+    {
+      id: newId('ins'),
+      instrumentNo: 'TW-2000-03',
+      name: 'Timegrapher TW-2000',
+      maker: 'WeiShi',
+      status: '停用',
+      location: '库房待修架',
+      certVersion: 1,
+      createdAt: now - 600 * day,
+      calibrations: [
+        {
+          calibratedAt: now - 400 * day,
+          certNo: 'JL-2025-0211',
+          certOrg: '省钟表质量检测站',
+          validUntil: now - 35 * day,
+          result: '合格',
+        },
+      ],
+    },
+  ];
+
   const tests: TimekeepingTest[] = [
     {
       id: newId('tst'),
@@ -228,13 +308,19 @@ export async function ensureSeedData(): Promise<void> {
       ],
       powerReserve: 46,
       conclusion: '合格',
+      // 无 instrumentRef：旧测试，列入待补证，不沿用原合格结论
     },
   ];
 
-  await db.transaction('rw', db.clocks, db.parts, db.steps, db.tests, async () => {
-    await db.clocks.bulkPut(clocks);
-    await db.parts.bulkPut(parts);
-    await db.steps.bulkPut(steps);
-    await db.tests.bulkPut(tests);
-  });
+  await db.transaction(
+    'rw',
+    [db.clocks, db.parts, db.steps, db.tests, db.instruments, db.reservations],
+    async () => {
+      await db.clocks.bulkPut(clocks);
+      await db.parts.bulkPut(parts);
+      await db.steps.bulkPut(steps);
+      await db.tests.bulkPut(tests);
+      await db.instruments.bulkPut(instruments);
+    },
+  );
 }

@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { readDbVersion } from './utils/db';
+import { useClockStore } from './stores/clockStore';
+import { useStepStore } from './stores/stepStore';
+import { useInstrumentStore } from './stores/instrumentStore';
 
 const route = useRoute();
 const router = useRouter();
+const clockStore = useClockStore();
+const stepStore = useStepStore();
+const instrumentStore = useInstrumentStore();
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/clocks')) return '/clocks';
   if (route.path.startsWith('/steps')) return '/steps/new';
   if (route.path.startsWith('/parts')) return '/parts';
+  if (route.path.startsWith('/instruments')) return '/instruments';
   if (route.path.startsWith('/tests')) return '/tests';
   return '/clocks';
 });
 
 const version = readDbVersion();
+
+// 跨页签/跨场景的仪器变动（停用、补检、改有效期、预约抢占）
+// 静默轮询刷新：事务互斥保证正确性，这里只负责让界面尽快跟上
+let refreshTimer: number | undefined;
 
 function onSelect(index: string) {
   if (index === '/tests') {
@@ -23,6 +34,22 @@ function onSelect(index: string) {
   }
   void router.push(index);
 }
+
+onMounted(() => {
+  void clockStore.load();
+  void stepStore.load();
+  void instrumentStore.load();
+  refreshTimer = window.setInterval(() => {
+    // 页签隐藏时浏览器已节流，无需额外处理
+    void clockStore.load();
+    void stepStore.load();
+    void instrumentStore.load();
+  }, 4000);
+});
+
+onBeforeUnmount(() => {
+  if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
+});
 </script>
 
 <template>
@@ -33,6 +60,7 @@ function onSelect(index: string) {
         <el-menu-item index="/clocks">钟表台账</el-menu-item>
         <el-menu-item index="/steps/new">工序录入</el-menu-item>
         <el-menu-item index="/parts">零件清单</el-menu-item>
+        <el-menu-item index="/instruments">仪器台账</el-menu-item>
         <el-menu-item index="/tests">走时测试</el-menu-item>
       </el-menu>
       <el-tag size="small" effect="plain">本地结构版本 v{{ version }}</el-tag>
